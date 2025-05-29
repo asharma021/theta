@@ -1,0 +1,31 @@
+public Map<String, Object> editTaskRequestComments(TaskRequestCommentInputobject inputobject) throws SQLException {
+    var commentResult = notificationRepository.editTaskRequestComments(inputobject);
+
+    Logger.info("Comment Result: {}", commentResult);
+
+    if (commentResult == null || commentResult.get(O_RESP_MSG) == null) {
+        Logger.error("O_RESP_MSG missing in stored procedure response: {}", commentResult);
+        throw new RuntimeException("Stored procedure did not return O_RESP_MSG");
+    }
+
+    // ✅ SAFER null-safe equals comparison
+    if (ERROR.equals(commentResult.get(O_RESP_MSG))) {
+        return commentResult;
+    }
+
+    Map<String, Object> result = new HashMap<>();
+
+    if (SUCCESS.equals(commentResult.get(O_RESP_MSG))) {
+        result = postNotifications(inputobject);
+        Logger.info("Post Notifications Result(s): {}", result);
+
+        if (!result.containsKey(ERROR)) {
+            eventSenderService.addEvent((List<EventObjectDTO>) result.get(EVENT_OBJECT_LIST));
+        }
+    }
+
+    return Map.of(
+        COMMENT_RESP, commentResult,
+        NOTIFICATION_RESP, result.getOrDefault(NOTIFICATION_RESP, "No notification generated")
+    );
+}
