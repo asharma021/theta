@@ -1,31 +1,184 @@
-public Map<String, Object> editTaskRequestComments(TaskRequestCommentInputobject inputobject) throws SQLException {
-    var commentResult = notificationRepository.editTaskRequestComments(inputobject);
+1. chevron-api.service.ts
+Remove or replace your existing getUserNamefromSOEID(...) method and add:
+ts
+Copy
+Edit
+  /**
+   * Replace this old GET-based stub:
+   * getUserNamefromSOEID(searchTerm: string, searchBySoeid: string) { … }
+   */
 
-    Logger.info("Comment Result: {}", commentResult);
-
-    if (commentResult == null || commentResult.get(O_RESP_MSG) == null) {
-        Logger.error("O_RESP_MSG missing in stored procedure response: {}", commentResult);
-        throw new RuntimeException("Stored procedure did not return O_RESP_MSG");
-    }
-
-    // ✅ SAFER null-safe equals comparison
-    if (ERROR.equals(commentResult.get(O_RESP_MSG))) {
-        return commentResult;
-    }
-
-    Map<String, Object> result = new HashMap<>();
-
-    if (SUCCESS.equals(commentResult.get(O_RESP_MSG))) {
-        result = postNotifications(inputobject);
-        Logger.info("Post Notifications Result(s): {}", result);
-
-        if (!result.containsKey(ERROR)) {
-            eventSenderService.addEvent((List<EventObjectDTO>) result.get(EVENT_OBJECT_LIST));
-        }
-    }
-
-    return Map.of(
-        COMMENT_RESP, commentResult,
-        NOTIFICATION_RESP, result.getOrDefault(NOTIFICATION_RESP, "No notification generated")
+  /** ← ADD this in its place */
+  getUserDetailsBySoeid(soeids: string[]): Observable<UserDetail[]> {
+    const headers = new HttpHeaders({
+      'API_KEY':      this.apiKey,
+      'Content-Type': 'application/json'
+    });
+    const body = {
+      'search-term':     soeids,
+      'search-by-soeid': true
+    };
+    return this.http.post<UserDetail[]>(
+      `${this.apiEndPoint}/user/get-user-details`,
+      body,
+      { headers }
     );
+  }
+2. tasks.component.ts
+In your component class, replace whatever you currently do to fetch comments with this new method chain:
+ts
+Copy
+Edit
+  private loadCommentsWithNames(requestID: string) {
+    this.apiService.getTaskRequestComments(requestID).pipe(
+      switchMap(comments => {
+        if (!comments?.length) return of([]);
+
+        // 1) EXTRACT unique SOEIDs from your comments:
+        const soeids = Array.from(new Set(comments.map(c => c.CRTE_BY_SOE_ID)));
+
+        // 2) If there ARE SOEIDs, call the POST /user/get-user-details:
+        return this.apiService.getUserDetailsBySoeid(soeids).pipe(
+          map(users => {
+            const nameMap = new Map(users.map(u => [u.USER_SOEID, u.USER_NM]));
+            // 3) MERGE name onto each comment object:
+            return comments.map(c => ({
+              ...c,
+              userName: nameMap.get(c.CRTE_BY_SOE_ID) 
+                         || c.CRTE_BY_SOE_ID
+            }));
+          })
+        );
+      })
+    )
+    .subscribe({
+      next: enriched => this.allComments = enriched,
+      error: err   => console.error('Error loading comments', err)
+    });
+  }
+And make sure your openViewCommentsPopup(...) calls this instead of your old getAllComments(...):
+ts
+Copy
+Edit
+  openViewCommentsPopup(data: any) {
+    const requestID = data.RQST_ID;
+    this.loadCommentsWithNames(requestID);      // ← CALL the new loader
+    this.viewCommentsModal = this.modalService.open(…);
+  }
+3. tasks.component.html
+In your *ngFor="let comment of allComments" block, replace the raw SOEID binding
+html
+Copy
+Edit
+<!-- BEFORE -->
+<b style="color: rgb(®, 106, 255)">
+  {{ comment.CRTE_BY_SOE_ID }}
+</b>
+html
+Copy
+Edit
+<!-- AFTER -->
+<b style="color: rgb(®, 106, 255)">
+  {{ comment.userName || comment.CRTE_BY_SOE_ID }}
+</b>
+That’s it!
+
+Service: swap out your old getUserNamefromSOEID for the POST-based getUserDetailsBySoeid.
+
+Component: use loadCommentsWithNames(...) (comments → lookup → merge).
+
+Template: change {{ comment.CRTE_BY_SOE_ID }} to {{ comment.userName || comment.CRTE_BY_SOE_ID }}.
+
+
+
+
+
+
+You said:
+IF THERE IS METHOD NAME DONT CHANGE METHOD NAME
+
+
+ChatGPT said:
+
+Thought for 6 seconds
+Understood—let’s keep your existing method name getUserNamefromSOEID, but swap out its internals to do the POST with JSON body. Then in your component just keep calling that same name instead of a new one.
+
+1) In chevron-api.service.ts
+Before (GET stub):
+
+ts
+Copy
+Edit
+getUserNamefromSOEID(searchTerm: string, searchBySoeid: string) {
+  return this.http.get(
+    `${this.apiEndPoint}/user/get-user-details?search-term=${searchTerm}&search-by-soeid=${searchBySoeid}`,
+    { headers: { "API_KEY": this.apiKey } }
+  );
 }
+After (preserve name, accept an array of SOEIDs, do POST body):
+
+ts
+Copy
+Edit
+/**
+ * Rename the parameter to an array, but keep the method name.
+ */
+getUserNamefromSOEID(soeids: string[]): Observable<UserDetail[]> {
+  const headers = new HttpHeaders({
+    'API_KEY':      this.apiKey,
+    'Content-Type': 'application/json'
+  });
+  const body = {
+    'search-term':     soeids,
+    'search-by-soeid': true
+  };
+  return this.http.post<UserDetail[]>(
+    `${this.apiEndPoint}/user/get-user-details`,
+    body,
+    { headers }
+  );
+}
+Note: You’ll need to update any call sites to pass an array of strings, not a single string + flag.
+
+2) In your component (tasks.component.ts)
+Where you previously called:
+
+ts
+Copy
+Edit
+this.apiService.getUserNamefromSOEID(singleSoeid, flag)
+Change to:
+
+ts
+Copy
+Edit
+// 1) extract unique SOEIDs from comments:
+const soeids = Array.from(
+  new Set(comments.map(c => c.CRTE_BY_SOE_ID))
+);
+
+// 2) call the same method name, now with an array:
+return this.apiService.getUserNamefromSOEID(soeids).pipe(
+  map(users => {
+    const nameMap = new Map(users.map(u => [u.USER_SOEID, u.USER_NM]));
+    return comments.map(c => ({
+      ...c,
+      userName: nameMap.get(c.CRTE_BY_SOE_ID) || c.CRTE_BY_SOE_ID
+    }));
+  })
+);
+And of course keep your openViewCommentsPopup(...) invoking whatever loader you have—no name changes there.
+
+3) Template stays identical:
+html
+Copy
+Edit
+<b style="color:rgb(®,106,255)">
+  {{ comment.userName || comment.CRTE_BY_SOE_ID }}
+</b>
+Summary of Minimal Diffs
+Service: only replace the body of getUserNamefromSOEID (still named exactly that).
+
+Component: pass an array into getUserNamefromSOEID, merge its response.
+
+Template: already uses comment.userName, no change.
